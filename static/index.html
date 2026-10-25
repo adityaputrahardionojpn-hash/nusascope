@@ -269,6 +269,14 @@ footer {font-size:10px;color:var(--muted);text-align:center;padding:20px 0}
           <span><i class="dot" style="background:var(--gold)"></i>Resistance</span>
         </div>
         <canvas id="chart" aria-label="Candlestick interaktif"></canvas>
+        <div class="panel" id="candleInfo" style="margin-top:10px;padding:11px" aria-live="polite">
+          <div class="panel-head"><h3 id="candleInfoTitle">Detail candle</h3><span class="small" id="candleInfoTime">Ketuk candle pada chart</span></div>
+          <div class="grid-two">
+            <div class="kv"><span>Open</span><b id="candleOpen">—</b></div><div class="kv"><span>Close</span><b id="candleClose">—</b></div>
+            <div class="kv"><span>High</span><b id="candleHigh">—</b></div><div class="kv"><span>Low</span><b id="candleLow">—</b></div>
+            <div class="kv"><span>Perubahan</span><b id="candleChange">—</b></div><div class="kv"><span>Rentang</span><b id="candleRange">—</b></div>
+          </div>
+        </div>
         <div class="chart-tools">
           <button type="button" id="zoomOut">− Zoom out</button>
           <button type="button" id="zoomIn">+ Zoom in</button>
@@ -352,6 +360,8 @@ let data = null;
 let chartCount = 60;
 let chartOffset = 0;
 let requestBusy = false;
+let selectedCandleTime = null;
+let chartGeometry = null;
 
 const assets = [
   ["BTCUSDT","Bitcoin"],["ETHUSDT","Ethereum"],["SOLUSDT","Solana"],
@@ -681,7 +691,7 @@ function renderMarket() {
   drawChart();
 }
 
-/* CHART CANDLESTICK: drag, pinch zoom, mouse wheel */
+/* CHART CANDLESTICK: drag, pinch zoom, crosshair, candle selection */
 function drawChart() {
   const canvas = $("chart");
   if (!canvas || !data || !$("dashboard").offsetParent) return;
@@ -691,144 +701,81 @@ function drawChart() {
   const candles = candlesAll.slice(start,end);
   if (!candles.length) return;
   setText("chartLabel",`${$("interval").selectedOptions[0].textContent} · ${candles.length} candle`);
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  if (!width || !height) return;
-  const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(width*ratio);
-  canvas.height = Math.round(height*ratio);
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio,0,0,ratio,0,0);
-  ctx.clearRect(0,0,width,height);
-
-  const pad = {left:8,right:76,top:14,bottom:18};
-  const plotW = width-pad.left-pad.right;
-  const plotH = height-pad.top-pad.bottom;
-  const values = candles.flatMap(c=>[Number(c.high),Number(c.low)]);
+  const width=canvas.clientWidth,height=canvas.clientHeight;
+  if(!width||!height)return;
+  const ratio=window.devicePixelRatio||1;
+  canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);
+  const ctx=canvas.getContext("2d");ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,width,height);
+  const pad={left:8,right:76,top:14,bottom:18};
+  const plotW=width-pad.left-pad.right,plotH=height-pad.top-pad.bottom;
+  const values=candles.flatMap(c=>[Number(c.high),Number(c.low)]);
   values.push(Number(data.resistance),Number(data.support));
-  let low = Math.min(...values.filter(Number.isFinite));
-  let high = Math.max(...values.filter(Number.isFinite));
-  if (!Number.isFinite(low) || !Number.isFinite(high)) return;
-  if (low===high) {low-=1;high+=1;}
-  const margin = (high-low)*.06;
-  low-=margin;high+=margin;
-  const y = value=>pad.top+(high-value)/(high-low)*plotH;
-  const step = plotW/candles.length;
-  const bodyW = Math.max(1,Math.min(14,step*.62));
-
+  let low=Math.min(...values.filter(Number.isFinite)),high=Math.max(...values.filter(Number.isFinite));
+  if(!Number.isFinite(low)||!Number.isFinite(high))return;
+  if(low===high){low-=1;high+=1;}
+  const margin=(high-low)*.06;low-=margin;high+=margin;
+  const y=value=>pad.top+(high-value)/(high-low)*plotH;
+  const step=plotW/candles.length,bodyW=Math.max(1,Math.min(14,step*.62));
+  chartGeometry={candles,start,end,pad,plotW,plotH,step,width,height,y};
   ctx.font="10px system-ui";
-  for (let i=0;i<5;i++) {
-    const yy=pad.top+i*plotH/4;
-    const val=high-i*(high-low)/4;
-    ctx.strokeStyle="#1c2b41";
-    ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(width-pad.right,yy);ctx.stroke();
+  for(let i=0;i<5;i++){
+    const yy=pad.top+i*plotH/4,val=high-i*(high-low)/4;
+    ctx.strokeStyle="#1c2b41";ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(width-pad.right,yy);ctx.stroke();
     ctx.fillStyle="#91a0b8";ctx.fillText(fmt(val),width-pad.right+5,yy+3);
   }
-  function level(value,color,label) {
-    if (!Number.isFinite(Number(value))) return;
-    const yy=y(Number(value));
-    ctx.strokeStyle=color;ctx.setLineDash([4,4]);
-    ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(width-pad.right,yy);ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle=color;ctx.fillText(label,width-pad.right+5,yy-3);
-  }
-  level(data.resistance,"#f4c76b","RES");
-  level(data.support,"#20d6a0","SUP");
-
+  function level(value,color,label){if(!Number.isFinite(Number(value)))return;const yy=y(Number(value));ctx.strokeStyle=color;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(pad.left,yy);ctx.lineTo(width-pad.right,yy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.fillText(label,width-pad.right+5,yy-3);}
+  level(data.resistance,"#f4c76b","RES");level(data.support,"#20d6a0","SUP");
   candles.forEach((c,i)=>{
-    const x=pad.left+i*step+step/2;
-    const open=Number(c.open),close=Number(c.close);
-    const color=close>=open?"#20d6a0":"#ff647c";
+    const x=pad.left+i*step+step/2,open=Number(c.open),close=Number(c.close),up=close>=open,color=up?"#20d6a0":"#ff647c";
     ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=1;
     ctx.beginPath();ctx.moveTo(x,y(Number(c.high)));ctx.lineTo(x,y(Number(c.low)));ctx.stroke();
-    const top=y(Math.max(open,close));
-    const bodyH=Math.max(1,Math.abs(y(open)-y(close)));
+    const top=y(Math.max(open,close)),bodyH=Math.max(1,Math.abs(y(open)-y(close)));
     ctx.fillRect(x-bodyW/2,top,bodyW,bodyH);
+    // A subtle outline makes candle direction easier to distinguish on small screens.
+    ctx.strokeStyle=up?"#a4ffe2":"#ffc0cb";ctx.strokeRect(x-bodyW/2,top,bodyW,bodyH);
   });
-
-  /* EMA 20 digambar dari close yang sedang terlihat */
-  let ema=null;
-  const alpha=2/21;
-  ctx.strokeStyle="#6d9cff";ctx.lineWidth=1.5;ctx.beginPath();
-  candles.forEach((c,i)=>{
-    const close=Number(c.close);
-    ema=ema===null?close:alpha*close+(1-alpha)*ema;
-    const x=pad.left+i*step+step/2;
-    if(i===0)ctx.moveTo(x,y(ema));else ctx.lineTo(x,y(ema));
-  });
-  ctx.stroke();
-
-  if (data.price!=null) {
-    const priceY=y(Number(data.price));
-    if(priceY>=pad.top && priceY<=pad.top+plotH) {
-      ctx.strokeStyle="#dce9ff";ctx.setLineDash([3,3]);
-      ctx.beginPath();ctx.moveTo(pad.left,priceY);ctx.lineTo(width-pad.right,priceY);ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle="#203b5d";
-      ctx.fillRect(width-pad.right+2,priceY-9,pad.right-4,18);
-      ctx.fillStyle="#dce9ff";
-      ctx.fillText(fmt(data.price),width-pad.right+5,priceY+3);
-    }
-  }
+  let ema=null;const alpha=2/21;ctx.strokeStyle="#6d9cff";ctx.lineWidth=1.5;ctx.beginPath();
+  candles.forEach((c,i)=>{const close=Number(c.close);ema=ema===null?close:alpha*close+(1-alpha)*ema;const x=pad.left+i*step+step/2;if(i===0)ctx.moveTo(x,y(ema));else ctx.lineTo(x,y(ema));});ctx.stroke();
+  if(data.price!=null){const priceY=y(Number(data.price));if(priceY>=pad.top&&priceY<=pad.top+plotH){ctx.strokeStyle="#dce9ff";ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(pad.left,priceY);ctx.lineTo(width-pad.right,priceY);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle="#203b5d";ctx.fillRect(width-pad.right+2,priceY-9,pad.right-4,18);ctx.fillStyle="#dce9ff";ctx.fillText(fmt(data.price),width-pad.right+5,priceY+3);}}
+  // Keep the selected candle and crosshair visible after redraw/zoom.
+  if(selectedCandleTime!=null){const idx=candles.findIndex(c=>String(c.openTime??c.time??c.timestamp??c.open_time)===String(selectedCandleTime));if(idx>=0)drawCrosshair(idx);}
+}
+function candleTime(c){const raw=c.openTime??c.time??c.timestamp??c.open_time; if(raw==null)return "Waktu candle tidak tersedia";const n=Number(raw);const d=new Date(n<1e12?n*1000:n);return Number.isNaN(d.getTime())?String(raw):d.toLocaleString("id-ID",{dateStyle:"medium",timeStyle:"short"});}
+function drawCrosshair(index){
+  if(!chartGeometry)return;const canvas=$("chart"),ctx=canvas.getContext("2d"),g=chartGeometry,c=g.candles[index];if(!c)return;
+  const ratio=window.devicePixelRatio||1;ctx.setTransform(ratio,0,0,ratio,0,0);
+  const x=g.pad.left+index*g.step+g.step/2,close=Number(c.close),yy=g.y(close);
+  ctx.save();ctx.strokeStyle="#dce9ff";ctx.lineWidth=1;ctx.setLineDash([3,4]);
+  ctx.beginPath();ctx.moveTo(x,g.pad.top);ctx.lineTo(x,g.height-g.pad.bottom);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(g.pad.left,yy);ctx.lineTo(g.width-g.pad.right,yy);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle="#263d5d";ctx.fillRect(g.pad.left,yy-9,Math.min(68,g.width-g.pad.right-g.pad.left),18);ctx.fillStyle="#fff";ctx.fillText(fmt(close),g.pad.left+3,yy+3);ctx.restore();
+  const open=Number(c.open),high=Number(c.high),low=Number(c.low),change=close-open,pct=open?change/open*100:NaN;
+  setText("candleInfoTitle",`${data.symbol||$("symbol").value} · ${close>=open?"Naik 🟢":"Turun 🔴"}`);
+  setText("candleInfoTime",candleTime(c));setText("candleOpen",usd(open));setText("candleClose",usd(close));setText("candleHigh",usd(high));setText("candleLow",usd(low));
+  setText("candleChange",`${change>=0?"+":""}${fmt(change)} (${Number.isFinite(pct)?(pct>=0?"+":"")+pct.toFixed(2)+"%":"—"})`);
+  $("candleChange").style.color=change>=0?"var(--green)":"var(--red)";setText("candleRange",usd(high-low));
+}
+function selectCandleAt(clientX){
+  if(!chartGeometry)return;const rect=$("chart").getBoundingClientRect(),g=chartGeometry;
+  const x=clientX-rect.left,idx=Math.max(0,Math.min(g.candles.length-1,Math.floor((x-g.pad.left)/g.step)));
+  const c=g.candles[idx];if(!c)return;selectedCandleTime=c.openTime??c.time??c.timestamp??c.open_time??null;drawChart();drawCrosshair(idx);
 }
 
 $("refresh").addEventListener("click",()=>loadMarket());
-$("symbol").addEventListener("change",()=>{chartOffset=0;loadMarket();});
-$("interval").addEventListener("change",()=>{chartOffset=0;loadMarket();});
-$("zoomIn").addEventListener("click",()=>{
-  chartCount=Math.max(12,chartCount-8);drawChart();
-});
-$("zoomOut").addEventListener("click",()=>{
-  chartCount=Math.min(120,chartCount+8);drawChart();
-});
-$("chartReset").addEventListener("click",()=>{
-  chartOffset=0;chartCount=60;drawChart();
-});
+$("symbol").addEventListener("change",()=>{chartOffset=0;selectedCandleTime=null;loadMarket();});
+$("interval").addEventListener("change",()=>{chartOffset=0;selectedCandleTime=null;loadMarket();});
+$("zoomIn").addEventListener("click",()=>{chartCount=Math.max(12,chartCount-8);drawChart();});
+$("zoomOut").addEventListener("click",()=>{chartCount=Math.min(120,chartCount+8);drawChart();});
+$("chartReset").addEventListener("click",()=>{chartOffset=0;chartCount=60;selectedCandleTime=null;drawChart();setText("candleInfoTitle","Detail candle");setText("candleInfoTime","Ketuk candle pada chart");["candleOpen","candleClose","candleHigh","candleLow","candleChange","candleRange"].forEach(id=>setText(id,"—"));});
 window.addEventListener("resize",drawChart);
-
 (function chartTouchControls(){
-  const canvas=$("chart");
-  const pointers=new Map();
-  let dragX=null,dragOffset=0,pinchDistance=null,pinchCount=chartCount;
+  const canvas=$("chart"),pointers=new Map();let dragX=null,dragOffset=0,pinchDistance=null,pinchCount=chartCount,pointerStart=null,moved=false;
   const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
-  canvas.addEventListener("pointerdown",e=>{
-    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
-    try{canvas.setPointerCapture(e.pointerId);}catch{}
-    if(pointers.size===1){dragX=e.clientX;dragOffset=chartOffset;}
-    if(pointers.size===2){
-      const pts=[...pointers.values()];
-      pinchDistance=distance(pts[0],pts[1]);pinchCount=chartCount;
-    }
-  });
-  canvas.addEventListener("pointermove",e=>{
-    if(!pointers.has(e.pointerId)||!data)return;
-    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
-    if(pointers.size>=2&&pinchDistance){
-      const pts=[...pointers.values()];
-      const scale=distance(pts[0],pts[1])/Math.max(1,pinchDistance);
-      chartCount=Math.max(12,Math.min(120,Math.round(pinchCount/scale)));
-      drawChart();
-    } else if(pointers.size===1&&dragX!==null){
-      const step=canvas.clientWidth/Math.max(1,chartCount);
-      chartOffset=Math.max(0,Math.min(
-        Math.max(0,data.candles.length-chartCount),
-        dragOffset+Math.round((dragX-e.clientX)/Math.max(1,step))
-      ));
-      drawChart();
-    }
-  });
-  function end(e){
-    pointers.delete(e.pointerId);
-    if(pointers.size<2)pinchDistance=null;
-    if(!pointers.size)dragX=null;
-  }
-  canvas.addEventListener("pointerup",end);
-  canvas.addEventListener("pointercancel",end);
-  canvas.addEventListener("wheel",e=>{
-    e.preventDefault();
-    chartCount=Math.max(12,Math.min(120,chartCount+(e.deltaY>0?6:-6)));
-    drawChart();
-  },{passive:false});
+  canvas.addEventListener("pointerdown",e=>{pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});try{canvas.setPointerCapture(e.pointerId);}catch{}if(pointers.size===1){dragX=e.clientX;dragOffset=chartOffset;pointerStart={x:e.clientX,y:e.clientY};moved=false;}if(pointers.size===2){const pts=[...pointers.values()];pinchDistance=distance(pts[0],pts[1]);pinchCount=chartCount;pointerStart=null;}});
+  canvas.addEventListener("pointermove",e=>{if(!pointers.has(e.pointerId)||!data)return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointerStart&&Math.abs(e.clientX-pointerStart.x)>5)moved=true;if(pointers.size>=2&&pinchDistance){const pts=[...pointers.values()],scale=distance(pts[0],pts[1])/Math.max(1,pinchDistance);chartCount=Math.max(12,Math.min(120,Math.round(pinchCount/scale)));drawChart();}else if(pointers.size===1&&dragX!==null&&moved){const step=$("chart").clientWidth/Math.max(1,chartCount);chartOffset=Math.max(0,Math.min(Math.max(0,data.candles.length-chartCount),dragOffset+Math.round((e.clientX-dragX)/Math.max(1,step))));drawChart();}});
+  function end(e){const wasTap=pointerStart&&!moved&&pointers.size===1;if(wasTap)selectCandleAt(e.clientX);pointers.delete(e.pointerId);if(pointers.size<2)pinchDistance=null;if(!pointers.size){dragX=null;pointerStart=null;moved=false;}}
+  canvas.addEventListener("pointerup",end);canvas.addEventListener("pointercancel",end);
+  canvas.addEventListener("wheel",e=>{e.preventDefault();chartCount=Math.max(12,Math.min(120,chartCount+(e.deltaY>0?6:-6)));drawChart();},{passive:false});
 })();
 </script>
 </body>
